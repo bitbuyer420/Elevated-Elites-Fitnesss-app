@@ -27,12 +27,20 @@ const barlow = Barlow({
 export const metadata: Metadata = {
   title: 'Elevated Elites — Train Without Limits',
   description: 'Elite fitness tracking for those who demand excellence.',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Elevated Elites',
+  },
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0A0A0A',
+  themeColor: '#CC0000',
   width: 'device-width',
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
