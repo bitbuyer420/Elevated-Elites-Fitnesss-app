@@ -40,6 +40,13 @@
   --nav-bot-h:  64px;
 }
 
+/* ── Reduce expensive blur effects on mobile for smoother perf ── */
+@media (max-width: 768px) {
+  :root {
+    --glass-blur: 14px;
+  }
+}
+
 /* ============================================================
    BASE
    ============================================================ */
@@ -49,6 +56,8 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   scroll-behavior: smooth;
+  /* Prevent elastic bounce scroll on iOS at the document level */
+  overscroll-behavior: none;
 }
 
 body {
@@ -57,6 +66,20 @@ body {
   font-family: var(--font-barlow), system-ui, sans-serif;
   min-height: 100dvh;
   line-height: 1.6;
+  /* Smooth momentum scrolling on iOS */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Remove 300ms tap delay and blue flash on all interactive elements */
+a, button, [role="button"], input, select, textarea, label {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Momentum scrolling in overflow containers */
+.overflow-y-auto, .overflow-y-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -246,9 +269,17 @@ h1, h2, h3, h4, h5, h6 {
     /* protected layout: offset for side nav on md+, bottom nav on mobile */
     padding-bottom: calc(var(--nav-bot-h) + 16px);
     min-height: 100dvh;
+    /* Momentum scrolling and containment for better mobile perf */
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
   }
   @media (min-width: 768px) {
     .page-content { padding-bottom: 24px; }
+  }
+
+  /* ── Animate-in hint so browser pre-composites these layers ── */
+  .animate-fadeIn {
+    will-change: opacity, transform;
   }
 
   /* ── Progress / ring ──────────────────────────────────── */

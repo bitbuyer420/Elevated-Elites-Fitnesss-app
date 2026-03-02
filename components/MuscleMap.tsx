@@ -4,21 +4,19 @@ import { useState } from 'react'
 
 export type MuscleView = 'front' | 'back'
 
-// days_since → fill colour
 function muscleColor(days?: number): string {
-  if (days === undefined || days > 3) return '#1C1C1C'
+  if (days === undefined || days > 3) return '#222222'
   if (days === 0) return '#CC0000'
   if (days === 1) return '#881111'
   return '#440000'
 }
 
 function muscleOpacity(days?: number): number {
-  if (days === undefined || days > 3) return 0.6
+  if (days === undefined || days > 3) return 0.75
   return 1
 }
 
 interface Props {
-  /** Map of muscle_group → days since last trained (undefined = never) */
   muscleDays: Record<string, number | undefined>
   view: MuscleView
 }
@@ -27,17 +25,19 @@ interface TooltipState { x: number; y: number; label: string; days?: number }
 
 export function MuscleMap({ muscleDays, view }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
-
   const d = muscleDays
 
-  function tip(label: string, muscle: string, e: React.MouseEvent) {
+  function tip(label: string, muscle: string, e: React.MouseEvent | React.TouchEvent) {
     const rect = (e.currentTarget as SVGElement).closest('svg')!.getBoundingClientRect()
-    setTooltip({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top - 36,
-      label,
-      days: d[muscle],
-    })
+    let clientX: number, clientY: number
+    if ('touches' in e) {
+      clientX = e.touches[0]?.clientX ?? (e as React.TouchEvent).changedTouches[0].clientX
+      clientY = e.touches[0]?.clientY ?? (e as React.TouchEvent).changedTouches[0].clientY
+    } else {
+      clientX = (e as React.MouseEvent).clientX
+      clientY = (e as React.MouseEvent).clientY
+    }
+    setTooltip({ x: clientX - rect.left, y: clientY - rect.top - 40, label, days: d[muscle] })
   }
   const clearTip = () => setTooltip(null)
 
@@ -46,85 +46,278 @@ export function MuscleMap({ muscleDays, view }: Props) {
     opacity: muscleOpacity(d[muscle]),
     onMouseEnter: (e: React.MouseEvent) => tip(label, muscle, e),
     onMouseLeave: clearTip,
+    onTouchStart: (e: React.TouchEvent) => { e.preventDefault(); tip(label, muscle, e) },
+    onTouchEnd: clearTip,
     className: 'muscle-region',
   })
+
+  // Body fill colors — dark with subtle depth via gradient
+  const S = '#2A2A2A' // stroke color
+  const sw = '0.8'    // stroke width
 
   return (
     <div className="relative select-none">
       <svg
         viewBox="0 0 200 500"
         className="w-full max-w-[200px] mx-auto"
-        style={{ filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.8))' }}
+        style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.85))' }}
       >
-        {/* ── Body silhouette (background) ─────────────── */}
-        {/* Head */}
-        <circle cx="100" cy="36" r="28" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Neck */}
-        <rect x="88" y="62" width="24" height="20" rx="5" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Torso */}
-        <path d="M 52 78 Q 36 80 26 102 L 22 158 L 24 218 Q 50 232 100 234 Q 150 232 176 218 L 178 158 L 174 102 Q 164 80 148 78 Z"
-          fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Left arm */}
-        <path d="M 22 108 Q 12 130 14 168 Q 16 195 26 222 L 44 222 Q 54 195 54 162 Q 54 126 46 100 Z"
-          fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Right arm */}
-        <path d="M 178 108 Q 188 130 186 168 Q 184 195 174 222 L 156 222 Q 146 195 146 162 Q 146 126 154 100 Z"
-          fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Hands */}
-        <ellipse cx="32" cy="230" rx="14" ry="12" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        <ellipse cx="168" cy="230" rx="14" ry="12" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Left leg */}
-        <path d="M 52 238 L 98 238 L 94 350 Q 82 362 70 355 Q 58 348 58 335 L 58 238" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Right leg */}
-        <path d="M 148 238 L 102 238 L 106 335 Q 106 348 130 355 Q 142 362 146 350 Z" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Lower legs */}
-        <path d="M 58 350 Q 54 395 60 435 Q 68 446 80 442 Q 90 438 92 426 Q 96 392 92 350 Z"
-          fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        <path d="M 142 350 Q 104 392 108 426 Q 110 438 120 442 Q 132 446 140 435 Q 146 395 142 350 Z"
-          fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        {/* Feet */}
-        <ellipse cx="76" cy="448" rx="22" ry="9" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
-        <ellipse cx="124" cy="448" rx="22" ry="9" fill="#0E0E0E" stroke="#2A2A2A" strokeWidth="1" />
+        <defs>
+          {/* Horizontal gradient to give subtle 3-D cylindrical depth to the torso */}
+          <linearGradient id="torsoDepth" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#0D0D0D" />
+            <stop offset="35%"  stopColor="#1C1C1C" />
+            <stop offset="50%"  stopColor="#202020" />
+            <stop offset="65%"  stopColor="#1C1C1C" />
+            <stop offset="100%" stopColor="#0D0D0D" />
+          </linearGradient>
+          <linearGradient id="limbDepth" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#0E0E0E" />
+            <stop offset="50%"  stopColor="#1A1A1A" />
+            <stop offset="100%" stopColor="#0E0E0E" />
+          </linearGradient>
+        </defs>
 
-        {/* ── Muscle overlays ───────────────────────────── */}
+        {/* ── HEAD ─────────────────────────────────────────────── */}
+        {/* Slightly oval, thinner chin */}
+        <path
+          d="M 100 8 C 122 8 126 20 126 36 C 126 52 120 62 100 64 C 80 62 74 52 74 36 C 74 20 78 8 100 8 Z"
+          fill="#171717" stroke={S} strokeWidth={sw}
+        />
+        {/* Ear nubs */}
+        <ellipse cx="74"  cy="36" rx="4" ry="7" fill="#141414" stroke={S} strokeWidth={sw} />
+        <ellipse cx="126" cy="36" rx="4" ry="7" fill="#141414" stroke={S} strokeWidth={sw} />
+
+        {/* ── NECK ─────────────────────────────────────────────── */}
+        <path
+          d="M 93 60 C 91 64 90 70 90 76 L 110 76 C 110 70 109 64 107 60 Z"
+          fill="#161616" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── TORSO (athletic V-taper) ──────────────────────────── */}
+        {/* Wide at shoulders (~140px), narrow at waist (~64px), slight hip flare */}
+        <path
+          d="
+            M 90 76 C 72 76 54 78 40 84
+            C 28 90 24 102 22 118
+            L 20 168
+            C 20 196 28 216 38 222
+            C 58 230 100 232 100 232
+            C 100 232 142 230 162 222
+            C 172 216 180 196 180 168
+            L 178 118
+            C 176 102 172 90 160 84
+            C 146 78 128 76 110 76
+            Z
+          "
+          fill="url(#torsoDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── LEFT UPPER ARM ────────────────────────────────────── */}
+        {/* Hangs from ~(22,118) to (28,222), about 24px wide */}
+        <path
+          d="
+            M 22 118
+            C 14 132 12 158 14 180
+            C 16 200 22 218 28 224
+            L 44 222
+            C 48 214 50 196 50 176
+            C 50 154 48 130 40 116
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── RIGHT UPPER ARM ───────────────────────────────────── */}
+        <path
+          d="
+            M 178 118
+            C 186 132 188 158 186 180
+            C 184 200 178 218 172 224
+            L 156 222
+            C 152 214 150 196 150 176
+            C 150 154 152 130 160 116
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── LEFT FOREARM ─────────────────────────────────────── */}
+        <path
+          d="
+            M 28 224
+            C 22 240 20 260 22 278
+            C 24 292 30 304 36 310
+            L 46 306
+            C 50 296 50 278 50 262
+            C 50 244 48 228 44 222
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── RIGHT FOREARM ────────────────────────────────────── */}
+        <path
+          d="
+            M 172 224
+            C 178 240 180 260 178 278
+            C 176 292 170 304 164 310
+            L 154 306
+            C 150 296 150 278 150 262
+            C 150 244 152 228 156 222
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── HANDS ────────────────────────────────────────────── */}
+        <ellipse cx="38"  cy="318" rx="10" ry="13" fill="#121212" stroke={S} strokeWidth={sw} />
+        <ellipse cx="162" cy="318" rx="10" ry="13" fill="#121212" stroke={S} strokeWidth={sw} />
+
+        {/* ── LEFT UPPER LEG ───────────────────────────────────── */}
+        {/* Gap of 6px at crotch: left leg x=54-96, right=104-146 */}
+        <path
+          d="
+            M 54 234
+            L 96 234
+            C 96 258 94 286 90 314
+            C 87 336 82 354 76 364
+            C 66 372 56 366 52 352
+            C 48 338 50 308 52 280
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── RIGHT UPPER LEG ──────────────────────────────────── */}
+        <path
+          d="
+            M 146 234
+            L 104 234
+            C 104 258 106 286 110 314
+            C 113 336 118 354 124 364
+            C 134 372 144 366 148 352
+            C 152 338 150 308 148 280
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── LEFT LOWER LEG ───────────────────────────────────── */}
+        {/* Diamond-shaped calf */}
+        <path
+          d="
+            M 52 356
+            C 46 376 46 404 50 428
+            C 53 446 62 456 72 456
+            C 82 456 90 446 92 428
+            C 94 406 90 376 84 358
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── RIGHT LOWER LEG ──────────────────────────────────── */}
+        <path
+          d="
+            M 148 356
+            C 154 376 154 404 150 428
+            C 147 446 138 456 128 456
+            C 118 456 110 446 108 428
+            C 106 406 110 376 116 358
+            Z
+          "
+          fill="url(#limbDepth)" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ── FEET ─────────────────────────────────────────────── */}
+        <path
+          d="M 48 452 C 44 462 46 470 54 474 C 62 478 80 476 92 470 C 98 466 98 460 92 456 Z"
+          fill="#111111" stroke={S} strokeWidth={sw}
+        />
+        <path
+          d="M 152 452 C 156 462 154 470 146 474 C 138 478 120 476 108 470 C 102 466 102 460 108 456 Z"
+          fill="#111111" stroke={S} strokeWidth={sw}
+        />
+
+        {/* ══ MUSCLE OVERLAYS ═══════════════════════════════════ */}
         {view === 'front' ? (
           <>
-            {/* Shoulders */}
-            <path d="M 52 80 Q 34 82 24 106 L 26 130 Q 36 140 52 132 L 54 106 Z" {...g('shoulders','Shoulders')} />
-            <path d="M 148 80 Q 166 82 176 106 L 174 130 Q 164 140 148 132 L 146 106 Z" {...g('shoulders','Shoulders')} />
-            {/* Chest */}
-            <path d="M 54 80 L 100 80 L 98 132 Q 74 142 54 130 Z" {...g('chest','Chest')} />
-            <path d="M 100 80 L 146 80 L 146 130 Q 126 142 102 132 Z" {...g('chest','Chest')} />
+            {/* Shoulders (anterior deltoids) */}
+            <path d="M 40 84 C 26 90 22 104 20 120 L 22 142 C 30 150 46 144 50 136 L 50 116 Z"
+              {...g('shoulders', 'Shoulders')} />
+            <path d="M 160 84 C 174 90 178 104 180 120 L 178 142 C 170 150 154 144 150 136 L 150 116 Z"
+              {...g('shoulders', 'Shoulders')} />
+
+            {/* Chest (pectorals) — left & right halves */}
+            <path d="M 50 86 C 72 80 100 78 100 78 L 98 140 C 76 150 50 136 50 136 Z"
+              {...g('chest', 'Chest')} />
+            <path d="M 150 86 C 128 80 100 78 100 78 L 102 140 C 124 150 150 136 150 136 Z"
+              {...g('chest', 'Chest')} />
+
             {/* Biceps */}
-            <path d="M 22 110 Q 12 130 14 164 Q 20 176 36 176 Q 48 170 52 152 L 52 112 Z" {...g('biceps','Biceps')} />
-            <path d="M 178 110 Q 188 130 186 164 Q 180 176 164 176 Q 152 170 148 152 L 148 112 Z" {...g('biceps','Biceps')} />
+            <path d="M 22 118 C 12 136 12 162 16 182 C 20 192 32 192 44 184 C 50 174 50 152 48 130 L 42 116 Z"
+              {...g('biceps', 'Biceps')} />
+            <path d="M 178 118 C 188 136 188 162 184 182 C 180 192 168 192 156 184 C 150 174 150 152 152 130 L 158 116 Z"
+              {...g('biceps', 'Biceps')} />
+
             {/* Abs */}
-            <path d="M 58 134 Q 100 146 142 134 L 140 216 Q 100 226 60 216 Z" {...g('abs','Abs')} />
+            <path d="M 54 142 C 76 152 100 154 100 154 C 100 154 124 152 146 142 L 144 220 C 124 228 100 230 100 230 C 100 230 76 228 56 220 Z"
+              {...g('abs', 'Abs')} />
+
             {/* Quads */}
-            <path d="M 58 240 L 96 240 L 92 348 Q 78 358 62 348 Z" {...g('quads','Quads')} />
-            <path d="M 104 240 L 142 240 L 138 348 Q 122 358 108 348 Z" {...g('quads','Quads')} />
+            <path d="M 54 236 L 95 236 C 95 260 92 288 88 314 C 85 336 80 352 74 362 C 62 370 54 362 50 348 C 46 334 50 300 52 272 Z"
+              {...g('quads', 'Quads')} />
+            <path d="M 146 236 L 105 236 C 105 260 108 288 112 314 C 115 336 120 352 126 362 C 138 370 146 362 150 348 C 154 334 150 300 148 272 Z"
+              {...g('quads', 'Quads')} />
+
             {/* Calves */}
-            <path d="M 62 352 Q 56 390 62 428 Q 70 442 80 438 Q 90 434 92 420 Q 94 388 90 352 Z" {...g('calves','Calves')} />
-            <path d="M 138 352 Q 106 388 108 420 Q 110 434 120 438 Q 130 442 138 428 Q 144 390 138 352 Z" {...g('calves','Calves')} />
+            <path d="M 52 360 C 46 382 46 408 50 430 C 54 448 64 456 74 454 C 86 452 92 438 92 420 C 92 400 88 376 82 360 Z"
+              {...g('calves', 'Calves')} />
+            <path d="M 148 360 C 154 382 154 408 150 430 C 146 448 136 456 126 454 C 114 452 108 438 108 420 C 108 400 112 376 118 360 Z"
+              {...g('calves', 'Calves')} />
           </>
         ) : (
           <>
-            {/* Triceps (back) */}
-            <path d="M 22 110 Q 12 132 14 168 Q 20 180 36 178 Q 48 172 52 154 L 52 112 Z" {...g('triceps','Triceps')} />
-            <path d="M 178 110 Q 188 132 186 168 Q 180 180 164 178 Q 152 172 148 154 L 148 112 Z" {...g('triceps','Triceps')} />
-            {/* Upper back */}
-            <path d="M 54 80 L 146 80 L 144 162 Q 100 172 56 162 Z" {...g('upper_back','Upper Back')} />
+            {/* Trapezius / rear delts */}
+            <path d="M 40 84 C 26 90 22 104 20 120 L 22 142 C 30 150 46 144 50 136 L 50 116 Z"
+              {...g('upper_back', 'Trapezius')} />
+            <path d="M 160 84 C 174 90 178 104 180 120 L 178 142 C 170 150 154 144 150 136 L 150 116 Z"
+              {...g('upper_back', 'Trapezius')} />
+
+            {/* Triceps */}
+            <path d="M 22 118 C 12 136 12 162 16 182 C 20 192 32 192 44 184 C 50 174 50 152 48 130 L 42 116 Z"
+              {...g('triceps', 'Triceps')} />
+            <path d="M 178 118 C 188 136 188 162 184 182 C 180 192 168 192 156 184 C 150 174 150 152 152 130 L 158 116 Z"
+              {...g('triceps', 'Triceps')} />
+
+            {/* Upper back (lats) — left and right of spine */}
+            <path d="M 50 86 C 72 80 100 78 100 78 L 100 86 L 98 170 C 76 178 50 166 50 166 Z"
+              {...g('upper_back', 'Upper Back')} />
+            <path d="M 150 86 C 128 80 100 78 100 78 L 100 86 L 102 170 C 124 178 150 166 150 166 Z"
+              {...g('upper_back', 'Upper Back')} />
+
             {/* Lower back */}
-            <path d="M 56 164 Q 100 174 144 164 L 142 218 Q 100 228 58 218 Z" {...g('lower_back','Lower Back')} />
+            <path d="M 50 168 C 76 178 100 176 100 176 C 100 176 124 178 150 168 L 148 222 C 124 230 100 232 100 232 C 100 232 76 230 52 222 Z"
+              {...g('lower_back', 'Lower Back')} />
+
             {/* Glutes */}
-            <path d="M 58 240 L 98 240 L 96 292 Q 78 302 60 290 Z" {...g('glutes','Glutes')} />
-            <path d="M 102 240 L 142 240 L 140 290 Q 122 302 104 292 Z" {...g('glutes','Glutes')} />
+            <path d="M 54 236 L 96 236 C 96 260 94 282 86 298 C 78 312 64 316 56 306 C 48 294 50 268 52 250 Z"
+              {...g('glutes', 'Glutes')} />
+            <path d="M 146 236 L 104 236 C 104 260 106 282 114 298 C 122 312 136 316 144 306 C 152 294 150 268 148 250 Z"
+              {...g('glutes', 'Glutes')} />
+
             {/* Hamstrings */}
-            <path d="M 60 294 L 94 294 L 92 348 Q 78 358 62 348 Z" {...g('hamstrings','Hamstrings')} />
-            <path d="M 106 294 L 140 294 L 138 348 Q 122 358 108 348 Z" {...g('hamstrings','Hamstrings')} />
+            <path d="M 56 308 L 92 308 C 91 332 88 354 82 364 C 74 374 60 370 54 358 C 48 344 50 322 52 312 Z"
+              {...g('hamstrings', 'Hamstrings')} />
+            <path d="M 144 308 L 108 308 C 109 332 112 354 118 364 C 126 374 140 370 146 358 C 152 344 150 322 148 312 Z"
+              {...g('hamstrings', 'Hamstrings')} />
+
             {/* Calves */}
-            <path d="M 62 352 Q 56 390 62 428 Q 70 442 80 438 Q 90 434 92 420 Q 94 388 90 352 Z" {...g('calves','Calves')} />
-            <path d="M 138 352 Q 106 388 108 420 Q 110 434 120 438 Q 130 442 138 428 Q 144 390 138 352 Z" {...g('calves','Calves')} />
+            <path d="M 52 360 C 46 382 46 408 50 430 C 54 448 64 456 74 454 C 86 452 92 438 92 420 C 92 400 88 376 82 360 Z"
+              {...g('calves', 'Calves')} />
+            <path d="M 148 360 C 154 382 154 408 150 430 C 146 448 136 456 126 454 C 114 452 108 438 108 420 C 108 400 112 376 118 360 Z"
+              {...g('calves', 'Calves')} />
           </>
         )}
       </svg>
