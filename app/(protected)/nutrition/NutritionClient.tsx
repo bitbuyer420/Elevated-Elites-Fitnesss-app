@@ -1,11 +1,7 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { GlassCard }   from '@/components/GlassCard'
-import { GlassButton } from '@/components/GlassButton'
-import { CalorieRing } from '@/components/CalorieRing'
-import { MacroBar }    from '@/components/MacroBar'
 
 type MealItem = {
   id: string; food_name: string
@@ -20,109 +16,148 @@ type Goals = {
   calorie_goal: number; protein_goal: number; carb_goal: number; fat_goal: number
 } | null
 
-const TIME_SECTIONS = ['breakfast','lunch','dinner','snack','pre_workout','post_workout'] as const
-
-interface Props {
-  userId:       string
-  initialMeals: Meal[]
-  goals:        Goals
-  initialDate:  string
-}
-
-interface NixFood {
+interface ParsedFood {
   food_name: string; nf_calories: number; nf_protein: number
   nf_total_carbohydrate: number; nf_total_fat: number
   nf_dietary_fiber: number; nf_sodium: number; nf_sugars: number
   serving_qty: number; serving_unit: string
 }
 
+const MEAL_ORDER = ['breakfast', 'lunch', 'dinner', 'pre_workout', 'post_workout', 'snack'] as const
+const MEAL_LABELS: Record<string, string> = {
+  breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner',
+  snack: 'Snack', pre_workout: 'Pre-Workout', post_workout: 'Post-Workout',
+}
+const MEAL_ICONS: Record<string, string> = {
+  breakfast: '🌅', lunch: '☀️', dinner: '🌙',
+  snack: '🍎', pre_workout: '⚡', post_workout: '💪',
+}
+
+interface Props {
+  userId: string
+  initialMeals: Meal[]
+  goals: Goals
+  initialDate: string
+}
+
 export function NutritionClient({ userId, initialMeals, goals, initialDate }: Props) {
-  const [meals,   setMeals]   = useState<Meal[]>(initialMeals)
-  const [date,    setDate]    = useState(initialDate)
-  const [loading, setLoading] = useState(false)
-  const [addingTo, setAddingTo] = useState<string | null>(null) // meal ID
-  const [searchQ, setSearchQ]   = useState('')
-  const [results, setResults]   = useState<NixFood[]>([])
-  const [searching, setSearching] = useState(false)
-  const [searchErr, setSearchErr] = useState<string | null>(null)
+  const [meals,      setMeals]      = useState<Meal[]>(initialMeals)
+  const [date,       setDate]       = useState(initialDate)
+  const [loading,    setLoading]    = useState(false)
+  const [aiInput,    setAiInput]    = useState('')
+  const [aiLogging,  setAiLogging]  = useState(false)
+  const [aiError,    setAiError]    = useState<string | null>(null)
+  const [lastLogged, setLastLogged] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const supabase = createClient()
 
-  // ── Aggregate totals ──────────────────────────────────
+  // ── Aggregates ──────────────────────────────────────────
   const totals = meals.reduce(
     (acc, m) => {
       m.meal_items.forEach(i => {
-        acc.calories += i.calories ?? 0; acc.protein += i.protein ?? 0
-        acc.carbs    += i.carbs    ?? 0; acc.fat     += i.fat     ?? 0
-        acc.fiber    += i.fiber    ?? 0; acc.sodium  += i.sodium  ?? 0
-        acc.sugar    += i.sugar    ?? 0
+        acc.calories += i.calories ?? 0
+        acc.protein  += i.protein  ?? 0
+        acc.carbs    += i.carbs    ?? 0
+        acc.fat      += i.fat      ?? 0
       })
       return acc
     },
-    { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sodium: 0, sugar: 0 }
+    { calories: 0, protein: 0, carbs: 0, fat: 0 }
   )
 
-  // ── Date change ───────────────────────────────────────
-  async function changeDate(d: string) {
-    setDate(d); setLoading(true)
-    const { data } = await supabase.from('meals').select('*, meal_items(*)').eq('user_id', userId).eq('date', d).order('created_at')
+  const calorieGoal = goals?.calorie_goal ?? 2000
+  const proteinGoal = goals?.protein_goal ?? 150
+  const carbGoal    = goals?.carb_goal    ?? 250
+  const fatGoal     = goals?.fat_goal     ?? 65
+  const remaining   = Math.max(0, calorieGoal - Math.round(totals.calories))
+  const calPct      = Math.min(totals.calories / calorieGoal, 1)
+  const isOver      = totals.calories > calorieGoal
+
+  // ── Date navigation ─────────────────────────────────────
+  const today = new Date().toISOString().split('T')[0]
+  const isToday = date === today
+
+  async function changeDate(direction: -1 | 1) {
+    const d = new Date(date + 'T12:00:00')
+    d.setDate(d.getDate() + direction)
+    const newDate = d.toISOString().split('T')[0]
+    setDate(newDate)
+    setLoading(true)
+    const { data } = await supabase
+      .from('meals').select('*, meal_items(*)')
+      .eq('user_id', userId).eq('date', newDate).order('created_at')
     setMeals(data ?? [])
     setLoading(false)
   }
 
-  // ── Create a meal section if it doesn't exist ─────────
+  function formatDate(iso: string) {
+    if (iso === today) return 'Today'
+    const yesterday = new Date(Date.now() - 864e5).toISOString().split('T')[0]
+    if (iso === yesterday) return 'Yesterday'
+    return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  }
+
+  // ── Ensure meal row ──────────────────────────────────────
   async function ensureMeal(time: string): Promise<string> {
     const existing = meals.find(m => m.time_of_day === time)
     if (existing) return existing.id
     const { data, error } = await supabase.from('meals').insert({
-      user_id: userId, date, meal_name: time.replace('_', ' '), time_of_day: time,
+      user_id: userId, date, meal_name: MEAL_LABELS[time] ?? time, time_of_day: time,
     }).select('*, meal_items(*)').single()
     if (error || !data) throw new Error(error?.message)
     setMeals(prev => [...prev, data])
     return data.id
   }
 
-  // ── Search Nutritionix ────────────────────────────────
-  async function search() {
-    if (!searchQ.trim()) return
-    setSearching(true); setSearchErr(null); setResults([])
+  // ── AI natural-language log ──────────────────────────────
+  async function logWithAI() {
+    if (!aiInput.trim() || aiLogging) return
+    setAiLogging(true)
+    setAiError(null)
+    setLastLogged(null)
+
     try {
-      const res = await fetch('/api/nutrition/search', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQ }),
+      const res = await fetch('/api/nutrition/log-natural', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: aiInput }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setResults(data.foods ?? [])
+
+      const { meal_type, foods } = data as { meal_type: string; foods: ParsedFood[] }
+      if (!foods?.length) throw new Error('No foods found')
+
+      const mealId = await ensureMeal(meal_type)
+
+      const itemRows = foods.map((f: ParsedFood) => ({
+        meal_id:   mealId,
+        food_name: f.food_name,
+        calories:  f.nf_calories ?? 0,
+        protein:   f.nf_protein ?? 0,
+        carbs:     f.nf_total_carbohydrate ?? 0,
+        fat:       f.nf_total_fat ?? 0,
+        fiber:     f.nf_dietary_fiber ?? 0,
+        sodium:    f.nf_sodium ?? 0,
+        sugar:     f.nf_sugars ?? 0,
+      }))
+
+      const { data: inserted } = await supabase.from('meal_items').insert(itemRows).select()
+      if (inserted) {
+        setMeals(prev => prev.map(m =>
+          m.id === mealId ? { ...m, meal_items: [...m.meal_items, ...(inserted as MealItem[])] } : m
+        ))
+        const totalCals = foods.reduce((s, f) => s + (f.nf_calories ?? 0), 0)
+        setLastLogged(`✓ ${foods.length} item${foods.length > 1 ? 's' : ''} added to ${MEAL_LABELS[meal_type] ?? meal_type} · ${Math.round(totalCals)} kcal`)
+        setAiInput('')
+      }
     } catch (e: unknown) {
-      setSearchErr((e as Error).message ?? 'Search failed')
+      setAiError((e as Error).message ?? 'Could not log food')
     }
-    setSearching(false)
+    setAiLogging(false)
   }
 
-  // ── Add food item ─────────────────────────────────────
-  async function addFood(food: NixFood, time: string) {
-    const mealId = await ensureMeal(time)
-    const { data: item } = await supabase.from('meal_items').insert({
-      meal_id:  mealId,
-      food_name: food.food_name,
-      calories: food.nf_calories ?? 0,
-      protein:  food.nf_protein ?? 0,
-      carbs:    food.nf_total_carbohydrate ?? 0,
-      fat:      food.nf_total_fat ?? 0,
-      fiber:    food.nf_dietary_fiber ?? 0,
-      sodium:   food.nf_sodium ?? 0,
-      sugar:    food.nf_sugars ?? 0,
-    }).select().single()
-
-    if (item) {
-      setMeals(prev => prev.map(m =>
-        m.id === mealId ? { ...m, meal_items: [...m.meal_items, item as MealItem] } : m
-      ))
-    }
-    setResults([]); setSearchQ(''); setAddingTo(null)
-  }
-
-  // ── Delete item ───────────────────────────────────────
+  // ── Delete item ──────────────────────────────────────────
   async function deleteItem(mealId: string, itemId: string) {
     await supabase.from('meal_items').delete().eq('id', itemId)
     setMeals(prev => prev.map(m =>
@@ -130,140 +165,220 @@ export function NutritionClient({ userId, initialMeals, goals, initialDate }: Pr
     ))
   }
 
+  // ── Sorted meals that have food ──────────────────────────
+  const activeMeals = MEAL_ORDER
+    .map(t => meals.find(m => m.time_of_day === t))
+    .filter((m): m is Meal => !!m && m.meal_items.length > 0)
+
   const fmt = (n: number) => Math.round(n).toLocaleString()
 
+  // Ring geometry
+  const RS = 148, RW = 11
+  const rad = (RS - RW) / 2
+  const circ = 2 * Math.PI * rad
+
   return (
-    <main className="px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto pt-8 space-y-5">
-      {/* Header */}
-      <div className="flex items-start justify-between animate-fadeIn">
-        <div>
-          <span className="font-label text-[11px] text-elite-red font-bold tracking-[0.3em] uppercase">Nutrition</span>
-          <h1 className="font-heading text-[44px] text-white tracking-wide mt-1 leading-none">Food Tracker</h1>
+    <div className="flex flex-col" style={{ minHeight: '100dvh', paddingBottom: 'calc(var(--nav-bot-h) + 68px)' }}>
+
+      {/* ── Date Nav ──────────────────────────────────── */}
+      <div className="flex items-center justify-between px-5 pt-8 pb-5">
+        <button onClick={() => changeDate(-1)} className="btn-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <div className="text-center">
+          <p className="font-label text-[10px] text-elite-red font-bold tracking-[0.3em] uppercase mb-0.5">Nutrition</p>
+          <p className="font-heading text-[20px] text-white tracking-wide leading-none">{formatDate(date)}</p>
         </div>
-        <input type="date" value={date} onChange={e => changeDate(e.target.value)}
-          className="glass-input w-auto text-sm" style={{ maxWidth: 160 }} />
+        <button onClick={() => changeDate(1)} disabled={isToday} className="btn-icon" style={{ opacity: isToday ? 0.25 : 1 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
       </div>
 
-      {/* Calorie ring + macros */}
-      <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4 animate-fadeIn [animation-delay:60ms]">
-        <GlassCard padding="lg" className="flex flex-col items-center gap-3 glass-card-glow">
-          <CalorieRing consumed={Math.round(totals.calories)} goal={goals?.calorie_goal ?? 2000} size={160} />
-        </GlassCard>
-        <GlassCard padding="lg" className="flex flex-col justify-center gap-4">
-          <MacroBar label="Protein" consumed={Math.round(totals.protein)} goal={goals?.protein_goal ?? 150} color="#CC0000" />
-          <MacroBar label="Carbs"   consumed={Math.round(totals.carbs)}   goal={goals?.carb_goal    ?? 250} color="#5588CC" />
-          <MacroBar label="Fat"     consumed={Math.round(totals.fat)}     goal={goals?.fat_goal     ?? 65}  color="#CC8822" />
-          {/* Micros */}
-          <div className="pt-3 border-t border-white/8 grid grid-cols-3 gap-2 text-center">
-            {[
-              { label: 'Fiber', value: `${fmt(totals.fiber)}g` },
-              { label: 'Sodium', value: `${fmt(totals.sodium)}mg` },
-              { label: 'Sugar', value: `${fmt(totals.sugar)}g` },
-            ].map(m => (
-              <div key={m.label}>
-                <p className="font-heading text-[20px] text-white">{m.value}</p>
-                <p className="font-label text-[10px] text-white/35 uppercase tracking-wide">{m.label}</p>
-              </div>
-            ))}
+      {/* ── Calorie Summary ───────────────────────────── */}
+      <div className="flex items-center justify-center gap-10 px-5 pb-5">
+
+        {/* Ring */}
+        <div className="relative flex items-center justify-center shrink-0" style={{ width: RS, height: RS }}>
+          <svg width={RS} height={RS} style={{ transform: 'rotate(-90deg)', position: 'absolute' }}>
+            <circle cx={RS/2} cy={RS/2} r={rad} fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth={RW} />
+            <circle cx={RS/2} cy={RS/2} r={rad} fill="none"
+              stroke={isOver ? '#FF4444' : '#CC0000'} strokeWidth={RW}
+              strokeLinecap="round" strokeDasharray={circ}
+              strokeDashoffset={circ * (1 - calPct)}
+              style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4,0,0.2,1), stroke 0.3s' }}
+            />
+          </svg>
+          <div className="text-center z-10">
+            <p className="font-heading leading-none text-white" style={{ fontSize: 32 }}>{fmt(Math.round(totals.calories))}</p>
+            <p className="font-label text-[10px] text-white/35 uppercase tracking-widest mt-1">eaten</p>
           </div>
-        </GlassCard>
+        </div>
+
+        {/* Stats column */}
+        <div className="space-y-4">
+          <div>
+            <p className="font-heading text-[26px] text-white leading-none">
+              {isOver ? `+${fmt(Math.round(totals.calories) - calorieGoal)}` : fmt(remaining)}
+            </p>
+            <p className="font-label text-[10px] uppercase tracking-widest mt-0.5" style={{ color: isOver ? '#FF6666' : 'rgba(255,255,255,0.35)' }}>
+              {isOver ? 'over goal' : 'remaining'}
+            </p>
+          </div>
+          <div className="h-px w-12 bg-white/10" />
+          <div>
+            <p className="font-heading text-[26px] text-white leading-none">{fmt(calorieGoal)}</p>
+            <p className="font-label text-[10px] text-white/35 uppercase tracking-widest mt-0.5">goal</p>
+          </div>
+        </div>
       </div>
 
-      {loading && <p className="text-white/40 font-label text-sm text-center py-4">Loading…</p>}
-
-      {/* Meal sections */}
-      {!loading && TIME_SECTIONS.map(time => {
-        const meal = meals.find(m => m.time_of_day === time)
-        const items = meal?.meal_items ?? []
-        const sectionCals = items.reduce((s, i) => s + (i.calories ?? 0), 0)
-
-        return (
-          <GlassCard key={time} padding="lg" className="animate-fadeIn">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="font-heading text-[22px] text-white tracking-wide capitalize">
-                  {time.replace('_', ' ')}
-                </h3>
-                {sectionCals > 0 && (
-                  <span className="font-label text-xs text-white/35">{fmt(sectionCals)} kcal</span>
-                )}
+      {/* ── Macro Pills ───────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-2.5 px-5 pb-5">
+        {[
+          { label: 'Protein', value: totals.protein, goal: proteinGoal, color: '#CC0000' },
+          { label: 'Carbs',   value: totals.carbs,   goal: carbGoal,    color: '#5588CC' },
+          { label: 'Fat',     value: totals.fat,     goal: fatGoal,     color: '#CC8822' },
+        ].map(m => {
+          const pct = Math.min(m.value / m.goal, 1)
+          return (
+            <div key={m.label} className="glass-card rounded-2xl p-3">
+              <p className="font-heading text-[22px] text-white leading-none">{Math.round(m.value)}<span className="text-[13px] text-white/40 font-body font-normal">g</span></p>
+              <div className="my-2" style={{ height: 6, borderRadius: 9999, background: 'rgba(255,255,255,0.10)', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${pct * 100}%`, background: m.color, borderRadius: 9999, transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)' }} />
               </div>
-              <button
-                onClick={() => { setAddingTo(addingTo === (meal?.id ?? time) ? null : (meal?.id ?? time)); setResults([]); setSearchQ('') }}
-                className="btn-icon"
-                aria-label="Add food"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-              </button>
+              <p className="font-label text-[10px] text-white/35 uppercase tracking-wide">{m.label}</p>
             </div>
+          )
+        })}
+      </div>
 
-            {/* Food items */}
-            {items.length > 0 && (
-              <div className="space-y-2 mb-4">
-                {items.map(item => (
-                  <div key={item.id} className="flex items-center justify-between p-3 rounded-xl bg-white/4 border border-white/6 group">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-label font-semibold text-sm text-white capitalize truncate">{item.food_name}</p>
-                      <p className="text-white/35 text-xs font-body mt-0.5">
-                        {fmt(item.calories)} kcal · P {fmt(item.protein)}g · C {fmt(item.carbs)}g · F {fmt(item.fat)}g
+      {/* ── Divider ───────────────────────────────────── */}
+      <div className="divider-red mx-5 mb-5" />
+
+      {/* ── Food Log ──────────────────────────────────── */}
+      <div className="flex-1 px-5 space-y-3">
+        {loading && <p className="text-white/25 text-sm font-label text-center py-10">Loading…</p>}
+
+        {!loading && activeMeals.length === 0 && (
+          <div className="text-center py-14">
+            <p className="font-heading text-[28px] text-white/15 tracking-wide">Nothing logged</p>
+            <p className="font-label text-sm text-white/20 mt-2">Tell the AI what you ate below</p>
+          </div>
+        )}
+
+        {!loading && activeMeals.map(meal => {
+          const mealCals = meal.meal_items.reduce((s, i) => s + (i.calories ?? 0), 0)
+          return (
+            <div key={meal.id} className="glass-card rounded-2xl overflow-hidden">
+              {/* Meal header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-white/6">
+                <div className="flex items-center gap-2">
+                  <span style={{ fontSize: 15 }}>{MEAL_ICONS[meal.time_of_day] ?? '🍽'}</span>
+                  <span className="font-label font-bold text-[13px] text-white uppercase tracking-wider">
+                    {MEAL_LABELS[meal.time_of_day] ?? meal.time_of_day}
+                  </span>
+                </div>
+                <span className="font-label text-[13px] text-white/40">{fmt(mealCals)} kcal</span>
+              </div>
+
+              {/* Food items */}
+              <div className="divide-y divide-white/5">
+                {meal.meal_items.map(item => (
+                  <div key={item.id} className="flex items-center px-4 py-3 group">
+                    <div className="flex-1 min-w-0 mr-3">
+                      <p className="font-label font-semibold text-[14px] text-white/90 capitalize truncate">{item.food_name}</p>
+                      <p className="font-body text-[11px] text-white/30 mt-0.5">
+                        P {Math.round(item.protein)}g · C {Math.round(item.carbs)}g · F {Math.round(item.fat)}g
                       </p>
                     </div>
-                    <button
-                      onClick={() => meal && deleteItem(meal.id, item.id)}
-                      className="ml-2 opacity-0 group-hover:opacity-100 text-white/30 hover:text-red-400 transition-all"
-                      aria-label="Delete food"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
-                        <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
-                      </svg>
-                    </button>
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span className="font-label font-bold text-[15px] text-white/75">{fmt(item.calories)}</span>
+                      {/* Delete: always visible on mobile, hover on desktop */}
+                      <button
+                        onClick={() => deleteItem(meal.id, item.id)}
+                        className="text-white/20 hover:text-red-400 active:text-red-400 transition-colors md:opacity-0 md:group-hover:opacity-100"
+                        aria-label="Remove"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
-            )}
+            </div>
+          )
+        })}
+      </div>
 
-            {/* Add food panel */}
-            {(addingTo === (meal?.id ?? time)) && (
-              <div className="border-t border-white/8 pt-4 space-y-3">
-                <div className="flex gap-2">
-                  <input
-                    className="glass-input flex-1"
-                    placeholder="e.g. 2 scrambled eggs, 100g oats..."
-                    value={searchQ}
-                    onChange={e => setSearchQ(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && search()}
-                  />
-                  <GlassButton variant="glass" onClick={search} loading={searching} style={{ width: 'auto', padding: '13px 16px' }}>
-                    Search
-                  </GlassButton>
-                </div>
-                {searchErr && <p className="text-red-400 text-xs font-body">{searchErr}</p>}
-                {results.length > 0 && (
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {results.map((food, i) => (
-                      <button key={i} onClick={() => addFood(food, time)}
-                        className="w-full text-left p-3 rounded-xl bg-white/4 border border-white/6 hover:border-elite-red/30 hover:bg-elite-red/6 transition-all">
-                        <p className="font-label font-semibold text-sm text-white capitalize">{food.food_name}</p>
-                        <p className="text-white/35 text-xs font-body">
-                          {Math.round(food.nf_calories)} kcal · {food.serving_qty} {food.serving_unit} ·
-                          P {Math.round(food.nf_protein)}g · C {Math.round(food.nf_total_carbohydrate)}g · F {Math.round(food.nf_total_fat)}g
-                        </p>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+      {/* ── AI Input Bar — fixed above bottom nav ─────── */}
+      <div
+        className="fixed left-0 right-0 z-40 px-4 py-3"
+        style={{
+          bottom: 'var(--nav-bot-h)',
+          background: 'rgba(8,8,8,0.96)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          borderTop: '1px solid rgba(255,255,255,0.07)',
+        }}
+      >
+        {/* Status line */}
+        {(aiError || lastLogged) && (
+          <p className={`font-label text-[12px] mb-2 px-1 leading-tight ${aiError ? 'text-red-400' : 'text-green-400'}`}>
+            {aiError ?? lastLogged}
+          </p>
+        )}
 
-            {items.length === 0 && addingTo !== (meal?.id ?? time) && (
-              <p className="text-white/20 text-sm font-body text-center py-2">No food logged</p>
+        <div className="flex gap-2 items-center">
+          <input
+            ref={inputRef}
+            className="flex-1 text-[14px] font-body text-white placeholder:text-white/25 outline-none"
+            style={{
+              background: 'rgba(255,255,255,0.07)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              borderRadius: 16,
+              padding: '12px 16px',
+              transition: 'border-color 0.15s',
+            }}
+            placeholder="What did you eat? e.g. chicken and rice for lunch"
+            value={aiInput}
+            onChange={e => { setAiInput(e.target.value); setLastLogged(null); setAiError(null) }}
+            onKeyDown={e => e.key === 'Enter' && logWithAI()}
+            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = 'rgba(204,0,0,0.5)' }}
+            onBlur={e => { (e.target as HTMLInputElement).style.borderColor = 'rgba(255,255,255,0.10)' }}
+          />
+          <button
+            onClick={logWithAI}
+            disabled={aiLogging || !aiInput.trim()}
+            className="shrink-0 flex items-center justify-center transition-all active:scale-95"
+            style={{
+              width: 46, height: 46,
+              borderRadius: 14,
+              background: aiInput.trim() && !aiLogging ? '#CC0000' : 'rgba(204,0,0,0.2)',
+              boxShadow: aiInput.trim() && !aiLogging ? '0 0 16px rgba(204,0,0,0.4)' : 'none',
+              transition: 'background 0.2s, box-shadow 0.2s',
+            }}
+            aria-label="Log food"
+          >
+            {aiLogging ? (
+              <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="white" strokeWidth="4"/>
+                <path className="opacity-75" fill="white" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
             )}
-          </GlassCard>
-        )
-      })}
-    </main>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
