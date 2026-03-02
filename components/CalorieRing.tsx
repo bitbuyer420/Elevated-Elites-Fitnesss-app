@@ -24,7 +24,7 @@ export function CalorieRing({ consumed, goal, size = 160, stroke = 12 }: Calorie
         <circle
           cx={cx} cy={cy} r={r}
           fill="none"
-          stroke="rgba(255,255,255,0.06)"
+          stroke="rgba(255,255,255,0.14)"
           strokeWidth={stroke}
         />
         {/* Fill */}
@@ -49,7 +49,7 @@ export function CalorieRing({ consumed, goal, size = 160, stroke = 12 }: Calorie
           kcal
         </span>
         <div className="mt-1 w-6 h-px bg-white/15" />
-        <span className="font-label text-white/25 mt-1" style={{ fontSize: size * 0.075 }}>
+        <span className="font-label text-white/45 mt-1" style={{ fontSize: size * 0.075 }}>
           / {goal.toLocaleString()}
         </span>
       </div>

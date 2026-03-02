@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { GlassCard }   from '@/components/GlassCard'
 import { GlassButton } from '@/components/GlassButton'
@@ -48,6 +49,8 @@ export function WorkoutClient({
   userId, todayWorkoutId, initialExercises, initialMuscles,
   recentWorkouts, personalRecords, recentMuscles, goal, activityLevel,
 }: Props) {
+  const router = useRouter()
+
   const [workoutId,   setWorkoutId]   = useState<string | null>(todayWorkoutId)
   const [exercises,   setExercises]   = useState<ExerciseRow[]>(initialExercises)
   const [muscles,     setMuscles]     = useState<string[]>(initialMuscles)
@@ -60,6 +63,7 @@ export function WorkoutClient({
   const [loadingAI,   setLoadingAI]   = useState(false)
   const [expanded,    setExpanded]    = useState<string | null>(null)
   const [muscleLoading, setMuscleLoading] = useState<string | null>(null)
+  const [finishing,   setFinishing]   = useState(false)
   const supabase = createClient()
 
   // ── Fetch AI suggestion on mount ──────────────────────────
@@ -192,6 +196,14 @@ export function WorkoutClient({
       }
     } catch { /* silent */ }
     setLoadingAI(false)
+  }
+
+  // ── Finish workout session ───────────────────────────────
+  async function finishWorkout() {
+    setFinishing(true)
+    // Brief delay so the user sees the "Done!" state before leaving
+    await new Promise(r => setTimeout(r, 800))
+    router.push('/dashboard')
   }
 
   const fmt = (n: number) => Number.isInteger(n) ? n.toString() : n.toFixed(1)
@@ -412,6 +424,41 @@ export function WorkoutClient({
                 Cancel
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Finish Workout — only shown when a session is active */}
+        {workoutId && !adding && (
+          <div className="mt-5 pt-4 border-t border-white/8">
+            <button
+              onClick={finishWorkout}
+              disabled={finishing}
+              className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-label font-bold text-sm tracking-widest uppercase transition-all"
+              style={{
+                background: finishing
+                  ? 'rgba(34,197,94,0.25)'
+                  : 'rgba(34,197,94,0.12)',
+                border: '1px solid rgba(34,197,94,0.35)',
+                color: finishing ? '#86efac' : '#4ade80',
+                boxShadow: finishing ? '0 0 20px rgba(34,197,94,0.2)' : 'none',
+              }}
+            >
+              {finishing ? (
+                <>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  Session Saved
+                </>
+              ) : (
+                <>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                  Finish Workout
+                </>
+              )}
+            </button>
           </div>
         )}
       </GlassCard>

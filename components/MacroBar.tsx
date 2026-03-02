@@ -14,10 +14,10 @@ export function MacroBar({ label, consumed, goal, unit = 'g', color = '#CC0000' 
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="font-label text-[12px] font-semibold text-white/50 uppercase tracking-wider">{label}</span>
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-label text-[12px] font-semibold text-white/70 uppercase tracking-wider">{label}</span>
         <span className="font-label text-[13px] font-bold text-white tabular-nums">
-          {consumed.toFixed(0)}<span className="text-white/30 font-normal">/{goal}{unit}</span>
+          {consumed.toFixed(0)}<span className="text-white/45 font-normal">/{goal}{unit}</span>
         </span>
       </div>
       <div className="macro-bar-track">
