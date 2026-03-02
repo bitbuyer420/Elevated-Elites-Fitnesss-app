@@ -28,8 +28,11 @@ export async function middleware(request: NextRequest) {
   const isAuthPage       = pathname.startsWith('/login') || pathname.startsWith('/signup')
   const isOnboardingPage = pathname.startsWith('/onboarding')
 
-  // Unauthenticated → /login (skip for auth pages and public assets)
-  if (!user && !isAuthPage) {
+  // API routes handle their own auth — don't redirect them to /login
+  const isApiRoute = pathname.startsWith('/api/')
+
+  // Unauthenticated → /login (skip for auth pages, API routes, and public assets)
+  if (!user && !isAuthPage && !isApiRoute) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
