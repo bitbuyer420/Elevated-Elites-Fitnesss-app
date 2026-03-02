@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 type MealItem = {
@@ -41,15 +41,18 @@ interface Props {
 }
 
 export function NutritionClient({ userId, initialMeals, goals, initialDate }: Props) {
-  const [meals,      setMeals]      = useState<Meal[]>(initialMeals)
-  const [date,       setDate]       = useState(initialDate)
-  const [loading,    setLoading]    = useState(false)
-  const [aiInput,    setAiInput]    = useState('')
-  const [aiLogging,  setAiLogging]  = useState(false)
-  const [aiError,    setAiError]    = useState<string | null>(null)
-  const [lastLogged, setLastLogged] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const supabase = createClient()
+  const [meals,        setMeals]        = useState<Meal[]>(initialMeals)
+  const [date,         setDate]         = useState(initialDate)
+  const [loading,      setLoading]      = useState(false)
+  const [aiInput,      setAiInput]      = useState('')
+  const [aiLogging,    setAiLogging]    = useState(false)
+  const [photoLoading, setPhotoLoading] = useState(false)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [aiError,      setAiError]      = useState<string | null>(null)
+  const [lastLogged,   setLastLogged]   = useState<string | null>(null)
+  const inputRef  = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
+  const supabase  = createClient()
 
   // ── Aggregates ──────────────────────────────────────────
   const totals = meals.reduce(
@@ -156,6 +159,77 @@ export function NutritionClient({ userId, initialMeals, goals, initialDate }: Pr
     }
     setAiLogging(false)
   }
+
+  // ── Photo logging ────────────────────────────────────────
+  const handlePhotoSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setPhotoLoading(true)
+    setAiError(null)
+    setLastLogged(null)
+
+    // Show preview immediately
+    const previewUrl = URL.createObjectURL(file)
+    setPhotoPreview(previewUrl)
+
+    // Read as base64
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = ev => {
+        const result = (ev.target?.result as string) ?? ''
+        resolve(result.split(',')[1]) // strip data:image/...;base64, prefix
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+
+    try {
+      const res = await fetch('/api/nutrition/log-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, mediaType: file.type || 'image/jpeg' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+
+      const { meal_type, foods, description } = data as {
+        meal_type: string
+        description?: string
+        foods: ParsedFood[]
+      }
+      if (!foods?.length) throw new Error('No food detected in image')
+
+      const mealId = await ensureMeal(meal_type)
+      const itemRows = foods.map((f: ParsedFood) => ({
+        meal_id:   mealId,
+        food_name: f.food_name,
+        calories:  f.nf_calories ?? 0,
+        protein:   f.nf_protein ?? 0,
+        carbs:     f.nf_total_carbohydrate ?? 0,
+        fat:       f.nf_total_fat ?? 0,
+        fiber:     f.nf_dietary_fiber ?? 0,
+        sodium:    f.nf_sodium ?? 0,
+        sugar:     f.nf_sugars ?? 0,
+      }))
+
+      const { data: inserted } = await supabase.from('meal_items').insert(itemRows).select()
+      if (inserted) {
+        setMeals(prev => prev.map(m =>
+          m.id === mealId ? { ...m, meal_items: [...m.meal_items, ...(inserted as MealItem[])] } : m
+        ))
+        const totalCals = foods.reduce((s, f) => s + (f.nf_calories ?? 0), 0)
+        setLastLogged(`📷 ${description ?? `${foods.length} item${foods.length > 1 ? 's' : ''}`} logged to ${MEAL_LABELS[meal_type] ?? meal_type} · ${Math.round(totalCals)} kcal`)
+      }
+    } catch (e: unknown) {
+      setAiError((e as Error).message ?? 'Could not analyze photo')
+    }
+
+    setPhotoLoading(false)
+    URL.revokeObjectURL(previewUrl)
+    setPhotoPreview(null)
+    if (cameraRef.current) cameraRef.current.value = ''
+  }, [meals, date, supabase, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Delete item ──────────────────────────────────────────
   async function deleteItem(mealId: string, itemId: string) {
@@ -327,14 +401,57 @@ export function NutritionClient({ userId, initialMeals, goals, initialDate }: Pr
           borderTop: '1px solid rgba(255,255,255,0.07)',
         }}
       >
+        {/* Photo preview while analyzing */}
+        {photoPreview && (
+          <div className="flex items-center gap-3 mb-2 px-1">
+            <img src={photoPreview} alt="Analyzing" className="w-10 h-10 rounded-lg object-cover" />
+            <p className="font-label text-[12px] text-white/50 animate-pulse">Analyzing photo with Claude…</p>
+          </div>
+        )}
+
         {/* Status line */}
-        {(aiError || lastLogged) && (
+        {(aiError || lastLogged) && !photoPreview && (
           <p className={`font-label text-[12px] mb-2 px-1 leading-tight ${aiError ? 'text-red-400' : 'text-green-400'}`}>
             {aiError ?? lastLogged}
           </p>
         )}
 
         <div className="flex gap-2 items-center">
+          {/* Camera button */}
+          <button
+            onClick={() => cameraRef.current?.click()}
+            disabled={aiLogging || photoLoading}
+            className="shrink-0 flex items-center justify-center transition-all active:scale-95"
+            style={{
+              width: 46, height: 46, borderRadius: 14,
+              background: 'rgba(255,255,255,0.07)',
+              border: '1px solid rgba(255,255,255,0.12)',
+            }}
+            aria-label="Log food from photo"
+          >
+            {photoLoading ? (
+              <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="white" strokeWidth="4"/>
+                <path className="opacity-75" fill="white" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+              </svg>
+            )}
+          </button>
+
+          {/* Hidden file input — opens camera on mobile */}
+          <input
+            ref={cameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handlePhotoSelect}
+          />
+
           <input
             ref={inputRef}
             className="flex-1 text-[14px] font-body text-white placeholder:text-white/25 outline-none"
@@ -352,9 +469,11 @@ export function NutritionClient({ userId, initialMeals, goals, initialDate }: Pr
             onFocus={e => { (e.target as HTMLInputElement).style.borderColor = 'rgba(204,0,0,0.5)' }}
             onBlur={e => { (e.target as HTMLInputElement).style.borderColor = 'rgba(255,255,255,0.10)' }}
           />
+
+          {/* Send button */}
           <button
             onClick={logWithAI}
-            disabled={aiLogging || !aiInput.trim()}
+            disabled={aiLogging || !aiInput.trim() || photoLoading}
             className="shrink-0 flex items-center justify-center transition-all active:scale-95"
             style={{
               width: 46, height: 46,

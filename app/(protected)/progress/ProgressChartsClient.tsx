@@ -135,7 +135,7 @@ export function ProgressChartsClient({
               onChange={e => setWeightInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSaveWeight()}
               placeholder="e.g. 82.5"
-              className="w-full bg-white/6 border border-white/12 rounded-xl px-4 py-2.5 text-white font-label text-sm placeholder:text-white/25 focus:outline-none focus:border-elite-red/50 focus:ring-1 focus:ring-elite-red/30 transition"
+              className="w-full bg-white border border-white/20 rounded-xl px-4 py-2.5 text-gray-900 font-label text-sm placeholder:text-gray-400 focus:outline-none focus:border-elite-red focus:ring-2 focus:ring-elite-red/30 transition"
             />
           </div>
           <div className="flex flex-col justify-end">
